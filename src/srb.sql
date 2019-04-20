@@ -44,16 +44,6 @@ DROP SCHEMA IF EXISTS srb;
 GO
 CREATE SCHEMA srb;
 GO
-IF( NOT EXISTS(select * from sys.service_contracts where name = 'DefaultContract'))
-BEGIN
-CREATE CONTRACT [DefaultContract] ([DEFAULT] SENT BY ANY);
-END
-GO
-IF( NOT EXISTS(select * from sys.service_contracts where name = 'DefaultSenderContract'))
-BEGIN
-	CREATE CONTRACT [DefaultSenderContract] ([DEFAULT] SENT BY Initiator);
-END
-GO
 
 CREATE TYPE srb.Strings AS TABLE( text NVARCHAR(MAX) ); 
 GO
@@ -76,7 +66,7 @@ GO
 CREATE OR ALTER PROCEDURE srb.create_service_on_queue
 @name sysname, 
 @queue sysname, 
-@contract sysname = 'DefaultContract'
+@contract sysname = '[DEFAULT]'
 AS BEGIN
 -- Creates a Service on the existing queue. Will use 'DefaultContact' if the contract is not specified.
     DECLARE @sql NVARCHAR(MAX);
@@ -88,7 +78,7 @@ GO
 CREATE OR ALTER PROCEDURE srb.create_service 
 @name sysname, 
 @callback nvarchar(256) = NULL, 
-@contract sysname = 'DefaultContract'
+@contract sysname = '[DEFAULT]'
 AS BEGIN
 
 	-- Creates a Service including a new queue. Will use 'DefaultContact' if the contract is not specified.
@@ -317,7 +307,7 @@ CREATE OR ALTER PROCEDURE srb.start_dialog
 @dialog_handle UNIQUEIDENTIFIER OUTPUT,
 @sender sysname,
 @receiver sysname,
-@contract sysname = 'DefaultContract',
+@contract sysname = '[DEFAULT]',
 @encryption varchar(3) = 'OFF' --> Keep it off unless if you know how to setup master keys.
 AS BEGIN
     DECLARE @sql NVARCHAR(MAX);
@@ -336,7 +326,7 @@ GO
 CREATE OR ALTER PROCEDURE srb.start_conversation
 @sender sysname,
 @receiver sysname,
-@contract sysname = 'DefaultContract',
+@contract sysname = '[DEFAULT]',
 @encryption varchar(3) = 'OFF' --> Keep it off unless if you know how to setup master keys.
 AS BEGIN
 	DECLARE @dialog UNIQUEIDENTIFIER; -- Just to ignore it.
