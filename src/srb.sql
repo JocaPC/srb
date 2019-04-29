@@ -6,6 +6,10 @@ DROP PROCEDURE IF EXISTS srb.send_message;
 GO
 DROP PROCEDURE IF EXISTS srb.post_message;
 GO
+DROP PROCEDURE IF EXISTS srb.trigger_dialog;
+GO
+DROP PROCEDURE IF EXISTS srb.trigger_conversation;
+GO
 DROP PROCEDURE IF EXISTS srb.get_message;
 GO
 DROP PROCEDURE IF EXISTS srb.view_messages;
@@ -78,7 +82,8 @@ GO
 CREATE OR ALTER PROCEDURE srb.create_service 
 @name sysname, 
 @callback nvarchar(256) = NULL, 
-@contract sysname = '[DEFAULT]'
+@contract sysname = '[DEFAULT]',
+@trigger nvarchar(256) = NULL
 AS BEGIN
 
 	-- Creates a Service including a new queue. Will use 'DefaultContact' if the contract is not specified.
@@ -121,7 +126,7 @@ AS BEGIN
 	SET @sql = CONCAT('CREATE QUEUE ', @queue, ' WITH STATUS = ON');
 	EXEC(@sql);
 
-	IF (@callback IS NOT NULL) BEGIN
+	IF (@callback IS NOT NULL OR @trigger IS NOT NULL) BEGIN
 
 		DECLARE @msgtype varchar(30) = (select top 1 case t.name when 'xml' then 'xml' else t.name + '(max)' end
 		from sys.parameters p
@@ -166,13 +171,11 @@ AS BEGIN
 		BEGIN
 			BEGIN TRY ",
 			CASE 
-				WHEN @callback IS NOT NULL THEN
+				WHEN @trigger IS NOT NULL THEN
 				CONCAT("-- Execute a timeout callback and provide message info.
-				DECLARE @p2 ",@msgtype," = CAST(@msg AS ",@msgtype,");
-				EXEC ", @callback, " @p2, @msg_type, @dialog;")
+				EXEC ", @trigger, " @dialog;")
 				ELSE CONCAT(" -- Log timeout message
-				DECLARE @timeoutMsg ",@msgtype," = 'Timeout in service ",@name, ": '+CAST(@msg AS ",@msgtype,");
-				RAISERROR( @timeoutMsg, 6, 1) WITH LOG; ")
+				RAISERROR( 'Timeout in service ",@name, "', 6, 1) WITH LOG; ")
 			END,"
 			END TRY  
 			BEGIN CATCH  
@@ -210,12 +213,16 @@ AS BEGIN
 				END CONVERSATION @dialog;
 		END
 		ELSE 
-		BEGIN
-            
-			BEGIN TRY  
-				-- Execute a callback and provide message info.
+		BEGIN  
+			BEGIN TRY",  
+			CASE 
+				WHEN @callback IS NOT NULL THEN
+				CONCAT("-- Execute a callback and provide message info.
 				DECLARE @p ",@msgtype," = CAST(@msg AS ",@msgtype,");
-				EXEC ", @callback, " @p, @msg_type, @dialog;
+				EXEC ", @callback, " @p, @msg_type, @dialog;")
+				ELSE CONCAT(" -- Log message
+				RAISERROR( 'Un-processed message in service ",@name, "', 6, 1) WITH LOG; ")
+			END,"	
 			END TRY  
 			BEGIN CATCH  
 				
@@ -323,6 +330,14 @@ WITH ENCRYPTION = ", @encryption);
 END
 GO
 
+CREATE OR ALTER PROCEDURE srb.trigger_dialog
+@dialog UNIQUEIDENTIFIER,
+@delay_s bigint NULL
+AS BEGIN
+	BEGIN CONVERSATION TIMER (@dialog) TIMEOUT = @delay_s; 
+END
+GO
+
 CREATE OR ALTER PROCEDURE srb.start_conversation
 @sender sysname,
 @receiver sysname,
@@ -337,6 +352,24 @@ AS BEGIN
 		@contract = @contract,
 		@encryption = @encryption 
 	--PRINT @dialog;
+END
+GO
+
+CREATE OR ALTER PROCEDURE srb.trigger_conversation
+@from SYSNAME,
+@to SYSNAME,
+@delay_s bigint NULL
+AS BEGIN
+	DECLARE @dialog UNIQUEIDENTIFIER;
+	SET @dialog = srb.get_cached_dialog(@from, @to);
+
+	IF (@dialog IS NULL) BEGIN
+		--PRINT 'Verbose: Starting new dialog';
+		EXEC srb.start_dialog @dialog OUTPUT, @from, @to;
+	END
+
+	--PRINT @dialog; 
+	BEGIN CONVERSATION TIMER (@dialog) TIMEOUT = @delay_s; 
 END
 GO
 
