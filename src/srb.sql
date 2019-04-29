@@ -374,19 +374,24 @@ END
 GO
 
 CREATE OR ALTER PROCEDURE srb.end_dialog
-@dialog_handle UNIQUEIDENTIFIER OUTPUT
+@dialog_handle UNIQUEIDENTIFIER,
+@cleanup bit = 0
 AS BEGIN
+	IF (@cleanup = 0)
 	END CONVERSATION @dialog_handle;
+	ELSE
+	END CONVERSATION @dialog_handle WITH CLEANUP;
 END
 GO
 
 CREATE OR ALTER PROCEDURE srb.end_conversation
 @sender sysname,
-@receiver sysname
+@receiver sysname,
+@cleanup bit = 0
 AS BEGIN
 	DECLARE @dialog_handle UNIQUEIDENTIFIER;
 	SET @dialog_handle = srb.get_cached_dialog(@sender, @receiver);
-	EXEC srb.end_dialog @dialog_handle;
+	EXEC srb.end_dialog @dialog_handle, @cleanup;
 END
 GO
 -- /END Dialog/Conversation management.
