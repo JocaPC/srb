@@ -36,6 +36,12 @@ DROP PROCEDURE IF EXISTS srb.create_service_on_queue;
 GO
 DROP PROCEDURE IF EXISTS srb.drop_service;
 GO
+DROP PROCEDURE IF EXISTS srb.init_endpoint;
+GO
+DROP PROCEDURE IF EXISTS srb.drop_endpoint;
+GO
+DROP PROCEDURE IF EXISTS srb.remote_init;
+GO
 DROP FUNCTION IF EXISTS srb.get_cached_dialog;
 GO
 DROP TYPE IF EXISTS srb.Messages;
@@ -490,3 +496,148 @@ AS BEGIN;
 						@N = @count
 		;
 END
+GO
+
+
+create or alter procedure
+srb.init_endpoint 
+		-- by convention, 4022 is used but any number between 1024 and 32767 is valid.
+		@port smallint = 4022,
+		@start_date datetime = NULL,
+		@expiry_date datetime = NULL,
+		@master_password NVARCHAR(200) = NULL,
+		@login sysname = NULL,
+		@password nvarchar(4000) = NULL		
+as begin
+
+DECLARE @c_start_date VARCHAR(20) = CAST(ISNULL(@start_date, GETUTCDATE()) AS VARCHAR(30));
+DECLARE @c_expiry_date VARCHAR(20) = CAST(ISNULL(@expiry_date, DATEADD(year, 1, GETUTCDATE())) AS VARCHAR(30));
+DECLARe @sql NVARCHAR(MAX);
+
+IF NOT EXISTS(SELECT * FROM master.sys.symmetric_keys WHERE NAME = '##MS_DatabaseMasterKey##')
+BEGIN
+	IF (@master_password IS NULL)
+	BEGIN
+	PRINT('-- Create MASTER KEY in master database:')
+	PRINT('USE master;')
+	PRINT('CREATE MASTER KEY ENCRYPTION BY PASSWORD = <Put some strong password here>;')
+	GOTO ErrorLabel
+	END
+	ELSE
+		EXEC("USE master;CREATE MASTER KEY ENCRYPTION BY PASSWORD = '"+@master_password+"'")
+END
+ELSE
+	PRINT('MASTER KEY exists in master database.')
+
+
+SET @sql = "USE master;
+CREATE CERTIFICATE ServiceBrokerCertificate
+WITH 
+	-- BOL: The term subject refers to a field in the metadata of 
+	--		the certificate as defined in the X.509 standard
+	SUBJECT = 'ServiceBrokerCertificate',
+	-- set the start date 
+	START_DATE = '"+@c_start_date+"', 
+	-- set the expiry data
+    EXPIRY_DATE = '"+@c_expiry_date+"'
+	-- enables the certifiacte for service broker initiator
+	ACTIVE FOR BEGIN_DIALOG = ON
+";
+--PRINT @sql;
+EXEC(@sql);
+
+SET @sql = "USE master;
+CREATE ENDPOINT ServiceBrokerEndPoint
+	-- set endpoint to activly listen for connections
+	STATE = STARTED
+	-- set it for TCP traffic only since service broker supports only TCP protocol
+	AS TCP (LISTENER_PORT = " + @port +")
+	FOR SERVICE_BROKER 
+	(
+		-- authenticate connections with our certificate
+		AUTHENTICATION = CERTIFICATE ServiceBrokerCertificate,
+		-- default is REQUIRED encryption but let's just set it to SUPPORTED
+		-- SUPPORTED means that the data is encrypted only if the 
+		-- opposite endpoint specifies either SUPPORTED or REQUIRED.
+		ENCRYPTION = SUPPORTED
+	)";
+--PRINT @sql;
+EXEC(@sql);
+
+GRANT CONNECT ON ENDPOINT::ServiceBrokerEndPoint TO public;
+
+ErrorLabel:
+end
+go
+
+CREATE PROCEDURE
+srb.drop_endpoint
+AS BEGIN
+
+	declare @service_broker_endpoint sysname, @certificate_name sysname;
+	declare @sql nvarchar(max);
+	select @service_broker_endpoint = sbe.name, @certificate_name = c.name
+	from sys.service_broker_endpoints sbe
+	left join sys.certificates c on sbe.certificate_id = c.certificate_id
+
+	if(@service_broker_endpoint is not null)
+	begin
+		set @sql = 'DROP ENDPOINT ' + @service_broker_endpoint;
+		exec(@sql);
+	end
+	else
+		print 'ServiceBroker endpoint don''t exists.';
+
+	if(@certifcate_name is not null)
+	begin
+		set @sql = 'DROP CERTIFICATE ' + @certificate_name;
+		exec(@sql);
+	end
+	else
+		print 'Certificate for ServiceBroker endpoint don''t exists';
+
+END
+GO
+
+CREATE PROCEDURE
+srb.remote_init 
+		@login sysname,
+		@password nvarchar(4000)
+as begin
+
+SET QUOTED_IDENTIFIER OFF;
+declare @sql nvarchar(max) = '';
+
+-- create the login that will be used to send the audited data through the Endpoint
+set @sql += "CREATE LOGIN "+@login+"Login WITH PASSWORD = '"+@password+"';
+";
+-- Create a user for our login
+set @sql += "CREATE USER "+@login+"User FOR LOGIN "+@login+"Login;
+";
+
+declare @cert_encoded varbinary(max);
+select @cert_encoded = CERTENCODED(certificate_id)
+from sys.service_broker_endpoints sbe;
+
+if(@cert_encoded is not null)
+set @sql += "CREATE CERTIFICATE ServiceBroker"+@login+"RemoteCertificate 
+		AUTHORIZATION "+@login+"User
+		FROM BINARY = "+CONVERT(VARCHAR(MAX), @cert_encoded, 1)+";
+";
+else
+	print 'Cannot find the certificate for service endpoint. Run srb.init_endpoint.'
+
+-- finally grant the connect permissions to login for the endpoint
+set @sql += "
+declare @endpoint_name sysname;
+select @endpoint_name = name
+from sys.service_broker_endpoints sbe;
+
+declare @sql nvarchar(max);
+set @sql = 'GRANT CONNECT ON ENDPOINT::'+@endpoint_name+' TO "+@login+"Login';
+exec(@sql);";
+
+PRINT 'Execute the following script on remote server instance:'
+PRINT @sql
+
+end
