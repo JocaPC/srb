@@ -40,9 +40,9 @@ DROP PROCEDURE IF EXISTS srb.init_endpoint;
 GO
 DROP PROCEDURE IF EXISTS srb.drop_endpoint;
 GO
-DROP PROCEDURE IF EXISTS srb.remote_init;
+DROP PROCEDURE IF EXISTS srb.init_remote_access;
 GO
-DROP PROCEDURE IF EXISTS srb.generate_remote_route;
+DROP PROCEDURE IF EXISTS srb.init_remote_proxy_route;
 GO
 DROP FUNCTION IF EXISTS srb.get_cached_dialog;
 GO
@@ -604,13 +604,13 @@ END
 GO
 
 CREATE PROCEDURE
-srb.remote_init 
+srb.init_remote_access 
 		@login sysname,
 		@password nvarchar(4000)
 as begin
 
-SET QUOTED_IDENTIFIER OFF;
-declare @sql nvarchar(max) = '';
+declare @sql nvarchar(max) = 'USE master;
+';
 
 -- create the login that will be used to send the audited data through the Endpoint
 set @sql += "CREATE LOGIN "+@login+"Login WITH PASSWORD = '"+@password+"';
@@ -620,11 +620,12 @@ set @sql += "CREATE USER "+@login+"User FOR LOGIN "+@login+"Login;
 ";
 
 declare @cert_encoded varbinary(max);
-select @cert_encoded = CERTENCODED(certificate_id)
-from sys.service_broker_endpoints sbe;
+EXEC sp_executesql	N'USE master;SELECT @cert = CERTENCODED(certificate_id) from sys.service_broker_endpoints',
+					N'@cert VARBINARY(MAX) OUTPUT',
+					@cert = @cert_encoded OUTPUT;
 
 if(@cert_encoded is not null)
-set @sql += "CREATE CERTIFICATE ServiceBroker"+@login+"RemoteCertificate 
+set @sql += "CREATE CERTIFICATE "+@login+"RemoteServiceBrokerCertificate 
 		AUTHORIZATION "+@login+"User
 		FROM BINARY = "+CONVERT(VARCHAR(MAX), @cert_encoded, 1)+";
 ";
@@ -647,7 +648,7 @@ PRINT @sql
 end
 GO
 
-CREATE PROCEDURE srb.generate_remote_route @service SYSNAME
+CREATE PROCEDURE srb.init_remote_proxy_route @service SYSNAME
 AS BEGIN
 declare @sql NVARCHAR(MAX);
 
@@ -662,7 +663,7 @@ from sys.service_broker_endpoints sbe
 where sbe.type = 3 -- SERVICE_BROKER
 and EXISTS(SELECT * FROM sys.services WHERE name = @service)
 )
-select @sql = CONCAT("CREATE ROUTE [", service_name , "Route] AUTHORIZATION [dbo] 
+select @sql = CONCAT("CREATE ROUTE [", server, "/", db_name, "/", service_name , "] AUTHORIZATION [dbo] 
 WITH SERVICE_NAME = N'",service_name,"' ,
 		BROKER_INSTANCE = N'",sb_guid,"' , 
 		ADDRESS = N'",protocol,"://",server,":",port,"'-- OR 'LOCAL' for intra-instance routes.")
