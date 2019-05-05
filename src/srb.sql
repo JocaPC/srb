@@ -42,6 +42,8 @@ DROP PROCEDURE IF EXISTS srb.drop_endpoint;
 GO
 DROP PROCEDURE IF EXISTS srb.remote_init;
 GO
+DROP PROCEDURE IF EXISTS srb.generate_remote_route;
+GO
 DROP FUNCTION IF EXISTS srb.get_cached_dialog;
 GO
 DROP TYPE IF EXISTS srb.Messages;
@@ -637,7 +639,35 @@ declare @sql nvarchar(max);
 set @sql = 'GRANT CONNECT ON ENDPOINT::'+@endpoint_name+' TO "+@login+"Login';
 exec(@sql);";
 
-PRINT 'Execute the following script on remote server instance:'
+PRINT 'Execute the following script on the remote server instance:'
 PRINT @sql
 
 end
+GO
+
+CREATE PROCEDURE srb.generate_remote_route @service SYSNAME
+AS BEGIN
+SET QUOTED_IDENTIFIER OFF
+declare @sql NVARCHAR(MAX);
+
+with route_info as (
+select db_name = DB_NAME(DB_ID()), service_name = @service,
+		sb_guid = (select service_broker_guid from sys.databases where name = DB_NAME(DB_ID())), 
+		protocol = te.protocol_desc,
+		server = isnull(ip_address, CAST(serverproperty('servername') as varchar(256))),
+		port
+from sys.service_broker_endpoints sbe
+	join sys.tcp_endpoints te on sbe.endpoint_id = te.endpoint_id
+where sbe.type = 3 -- SERVICE_BROKER
+and EXISTS(SELECT * FROM sys.services WHERE name = @service)
+)
+select @sql = CONCAT("CREATE ROUTE [", service_name , "Route] AUTHORIZATION [dbo] 
+WITH SERVICE_NAME = N'",service_name,"' ,
+		BROKER_INSTANCE = N'",sb_guid,"' , 
+		ADDRESS = N'",protocol,"://",server,":",port,"'-- OR 'LOCAL' for intra-instance routes.")
+from route_info;
+
+PRINT 'Execute the following script on the remote server instance:'
+PRINT @sql
+END;
+GO
