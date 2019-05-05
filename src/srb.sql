@@ -507,9 +507,7 @@ srb.init_endpoint
 		@port smallint = 4022,
 		@start_date datetime = NULL,
 		@expiry_date datetime = NULL,
-		@master_password NVARCHAR(200) = NULL,
-		@login sysname = NULL,
-		@password nvarchar(4000) = NULL		
+		@master_password NVARCHAR(200) = NULL
 as begin
 
 DECLARE @c_start_date VARCHAR(20) = CAST(ISNULL(@start_date, GETUTCDATE()) AS VARCHAR(30));
@@ -545,6 +543,7 @@ WITH
 	-- enables the certifiacte for service broker initiator
 	ACTIVE FOR BEGIN_DIALOG = ON
 ";
+PRINT 'Created Service Broker certificate';
 --PRINT @sql;
 EXEC(@sql);
 
@@ -553,7 +552,7 @@ CREATE ENDPOINT ServiceBrokerEndPoint
 	-- set endpoint to activly listen for connections
 	STATE = STARTED
 	-- set it for TCP traffic only since service broker supports only TCP protocol
-	AS TCP (LISTENER_PORT = " + @port +")
+	AS TCP (LISTENER_PORT = " + CAST(@port AS VARCHAR(6)) +")
 	FOR SERVICE_BROKER 
 	(
 		-- authenticate connections with our certificate
@@ -563,10 +562,11 @@ CREATE ENDPOINT ServiceBrokerEndPoint
 		-- opposite endpoint specifies either SUPPORTED or REQUIRED.
 		ENCRYPTION = SUPPORTED
 	)";
+PRINT 'Created Service Broker endpoint';
 --PRINT @sql;
 EXEC(@sql);
 
-GRANT CONNECT ON ENDPOINT::ServiceBrokerEndPoint TO public;
+EXEC("USE master;GRANT CONNECT ON ENDPOINT::ServiceBrokerEndPoint TO public;")
 
 ErrorLabel:
 end
@@ -580,20 +580,22 @@ AS BEGIN
 	declare @sql nvarchar(max);
 	select @service_broker_endpoint = sbe.name, @certificate_name = c.name
 	from sys.service_broker_endpoints sbe
-	left join sys.certificates c on sbe.certificate_id = c.certificate_id
+	left join master.sys.certificates c on sbe.certificate_id = c.certificate_id
 
 	if(@service_broker_endpoint is not null)
 	begin
-		set @sql = 'DROP ENDPOINT ' + @service_broker_endpoint;
+		set @sql = 'USE master;DROP ENDPOINT ' + @service_broker_endpoint;
 		exec(@sql);
+		PRINT 'Dropped service broker endpoint in master database';
 	end
 	else
 		print 'ServiceBroker endpoint don''t exists.';
 
 	if(@certificate_name is not null)
 	begin
-		set @sql = 'DROP CERTIFICATE ' + @certificate_name;
+		set @sql = 'USE master;DROP CERTIFICATE ' + @certificate_name;
 		exec(@sql);
+		PRINT 'Dropped service broker certificate in master database';
 	end
 	else
 		print 'Certificate for ServiceBroker endpoint don''t exists';
