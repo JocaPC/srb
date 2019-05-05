@@ -647,7 +647,6 @@ GO
 
 CREATE PROCEDURE srb.generate_remote_route @service SYSNAME
 AS BEGIN
-SET QUOTED_IDENTIFIER OFF
 declare @sql NVARCHAR(MAX);
 
 with route_info as (
