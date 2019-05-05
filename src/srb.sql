@@ -588,7 +588,7 @@ AS BEGIN
 	else
 		print 'ServiceBroker endpoint don''t exists.';
 
-	if(@certifcate_name is not null)
+	if(@certificate_name is not null)
 	begin
 		set @sql = 'DROP CERTIFICATE ' + @certificate_name;
 		exec(@sql);
