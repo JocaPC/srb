@@ -648,7 +648,10 @@ PRINT @sql
 end
 GO
 
-CREATE PROCEDURE srb.init_remote_proxy_route @service SYSNAME
+CREATE PROCEDURE srb.init_remote_proxy_route 
+	@service SYSNAME,
+	@address varchar(256) = NULL,
+	@authorization sysname = 'dbo'
 AS BEGIN
 declare @sql NVARCHAR(MAX);
 
@@ -663,10 +666,12 @@ from sys.service_broker_endpoints sbe
 where sbe.type = 3 -- SERVICE_BROKER
 and EXISTS(SELECT * FROM sys.services WHERE name = @service)
 )
-select @sql = CONCAT("CREATE ROUTE [", server, "/", db_name, "/", service_name , "] AUTHORIZATION [dbo] 
+select @sql = CONCAT("CREATE ROUTE [", server, "/", db_name, "/", service_name , "] AUTHORIZATION [",@authorization,"] 
 WITH SERVICE_NAME = N'",service_name,"' ,
 		BROKER_INSTANCE = N'",sb_guid,"' , 
-		ADDRESS = N'",protocol,"://",server,":",port,"'-- OR 'LOCAL' for intra-instance routes.")
+		ADDRESS = N'",
+		ISNULL(@address, CONCAT(protocol,"://",server,":",port)),
+		"'-- OR 'LOCAL' for intra-instance routes.")
 from route_info;
 
 PRINT 'Execute the following script on the remote server instance:'
