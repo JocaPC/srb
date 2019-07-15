@@ -33,8 +33,8 @@ exec srb.start_conversation 'SenderService', 'EchoService';
 --A1533DC8-FB61-E911-B26E-74E5F965F7F1
 --select * from srb.Conversations
 exec srb.send_message 'SenderService', 'EchoService', N'Jovan'
-exec srb.send_message 'SenderService', 'EchoService', N'Vida'
-exec srb.send_message 'SenderService', 'EchoService', N'Lana'
+exec srb.send_message 'SenderService', 'EchoService', N'Hrkljush'
+exec srb.send_message 'SenderService', 'EchoService', N'Test'
 
 --> EchoService will reply to Sender.
 

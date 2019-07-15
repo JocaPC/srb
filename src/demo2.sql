@@ -33,8 +33,8 @@ exec srb.start_dialog @dialog OUTPUT, 'SenderService', 'EchoService';
 print @dialog;
 
 exec srb.post_message @dialog, N'Jovan'
-exec srb.post_message @dialog, N'Vida'
-exec srb.post_message @dialog, N'Dana'
+exec srb.post_message @dialog, N'Mike'
+exec srb.post_message @dialog, N'Hrkljush'
 
 --> EchoService will reply to Sender.
 
