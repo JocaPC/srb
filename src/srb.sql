@@ -56,6 +56,8 @@ DROP PROCEDURE IF EXISTS srb.init_remote_proxy_route;
 GO
 DROP FUNCTION IF EXISTS srb.get_cached_dialog;
 GO
+DROP PROCEDURE IF EXISTS srb.kill_all_conversations;
+GO
 DROP VIEW IF EXISTS srb.conversations;
 GO
 DROP TYPE IF EXISTS srb.Messages;
@@ -713,3 +715,28 @@ FROM sys.conversation_endpoints ce
 JOIN sys.services s ON ce.service_id = s.service_id
 JOIN sys.service_queues sq ON s.service_queue_id = sq.object_id;
 GO
+
+CREATE OR ALTER PROCEDURE srb.kill_all_conversations
+AS BEGIN
+
+DECLARE @conversation_handle UNIQUEIDENTIFIER;
+DECLARE conversation_cursor CURSOR FOR  
+SELECT DISTINCT conversation_handle FROM srb.conversations;  
+  
+OPEN conversation_cursor;  
+    
+FETCH NEXT FROM conversation_cursor
+INTO @conversation_handle;  
+  
+-- Check @@FETCH_STATUS to see if there are any more rows to fetch.  
+WHILE @@FETCH_STATUS = 0  
+BEGIN  
+   EXEC srb.drop_conversation @conversation_handle;
+   FETCH NEXT FROM conversation_cursor
+   INTO @conversation_handle;  
+END  
+  
+CLOSE conversation_cursor;  
+DEALLOCATE conversation_cursor;  
+
+END
