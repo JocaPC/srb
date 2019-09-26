@@ -40,36 +40,6 @@ END
 
 /* Drop all tables */
 
-BEGIN TRY
-	EXEC('ALTER TABLE srb.io_virtual_file_stats_snapshot 
-			SET (SYSTEM_VERSIONING = OFF)');
-END TRY BEGIN CATCH END CATCH;
-
-BEGIN TRY
-	EXEC('ALTER TABLE srb.dm_io_virtual_file_stats_snapshot 
-			SET (SYSTEM_VERSIONING = OFF)');
-END TRY BEGIN CATCH END CATCH;
-
-BEGIN TRY
-	EXEC('ALTER TABLE srb.os_performance_counters_snapshot 
-			SET (SYSTEM_VERSIONING = OFF)');
-END TRY BEGIN CATCH END CATCH;
-
-BEGIN TRY
-	EXEC('ALTER TABLE srb.dm_os_performance_counters_snapshot 
-			SET (SYSTEM_VERSIONING = OFF)');
-END TRY BEGIN CATCH END CATCH;
-
-BEGIN TRY
-	EXEC('ALTER TABLE srb.os_wait_stats_snapshot 
-			SET (SYSTEM_VERSIONING = OFF)');
-END TRY BEGIN CATCH END CATCH;
-
-BEGIN TRY
-	EXEC('ALTER TABLE srb.dm_os_wait_stats_snapshot 
-			SET (SYSTEM_VERSIONING = OFF)');
-END TRY BEGIN CATCH END CATCH;
-
 SELECT @name = (SELECT TOP 1 [name] FROM sys.objects WHERE [type] = 'U'  AND SCHEMA_NAME(schema_id) = 'srb' ORDER BY [name])
 
 WHILE @name IS NOT NULL

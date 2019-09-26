@@ -6,7 +6,7 @@ exec srb.create_service 'Receiver';
 exec srb.view_messages 'Sender';
 exec srb.view_messages 'Receiver';
 
-exec srb.send_message 'Sender', 'Receiver', 'Hello, this is my first mesage';
+exec srb.send_message 'Sender', 'Receiver', 'Hello, this is my first message';
 
 exec srb.view_messages 'Sender';
 exec srb.view_messages 'Receiver';

@@ -1,4 +1,4 @@
-use DB1
+
 go
 -- Cleanup: drops created services             
 exec srb.drop_service 'EchoService'
@@ -29,7 +29,7 @@ exec srb.create_service 'EchoService', 'dbo.reply';
 
 -- Sends the message 'Jovan' via dialog between Sender and EchoService
 
-exec srb.start_conversation 'SenderService', 'EchoService';
+exec srb.start_dialog 'SenderService', 'EchoService';
 --A1533DC8-FB61-E911-B26E-74E5F965F7F1
 --select * from srb.Conversations
 exec srb.send_message 'SenderService', 'EchoService', N'Jovan'
@@ -51,7 +51,7 @@ select 'Replied mesage: ' + @msg
 -- Checks whether there's some message in the service. There should be none.
 exec srb.view_messages 'SenderService'
 
-exec srb.end_conversation 'SenderService', 'EchoService';
+exec srb.end_dialog 'SenderService', 'EchoService';
 
 exec srb.view_messages 'SenderService'
 

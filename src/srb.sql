@@ -8,7 +8,7 @@ DROP PROCEDURE IF EXISTS srb.post_message;
 GO
 DROP PROCEDURE IF EXISTS srb.trigger_dialog;
 GO
-DROP PROCEDURE IF EXISTS srb.trigger_conversation;
+DROP PROCEDURE IF EXISTS srb.ping;
 GO
 DROP PROCEDURE IF EXISTS srb.get_message;
 GO
@@ -22,13 +22,23 @@ DROP PROCEDURE IF EXISTS srb.post_data;
 GO
 DROP PROCEDURE IF EXISTS srb.get_messages;
 GO
+DROP SYNONYM IF EXISTS srb.start_conversation;
+GO
 DROP PROCEDURE IF EXISTS srb.start_dialog;
 GO
-DROP PROCEDURE IF EXISTS srb.start_conversation;
+DROP PROCEDURE IF EXISTS srb.new_conversation;
+GO
+DROP SYNONYM IF EXISTS srb.end_conversation;
 GO
 DROP PROCEDURE IF EXISTS srb.end_dialog;
 GO
-DROP PROCEDURE IF EXISTS srb.end_conversation;
+DROP SYNONYM IF EXISTS srb.delete_dialog;
+GO
+DROP SYNONYM IF EXISTS srb.delete_conversation;
+GO
+DROP SYNONYM IF EXISTS srb.drop_dialog;
+GO
+DROP PROCEDURE IF EXISTS srb.drop_conversation;
 GO
 DROP PROCEDURE IF EXISTS srb.create_service;
 GO
@@ -45,6 +55,8 @@ GO
 DROP PROCEDURE IF EXISTS srb.init_remote_proxy_route;
 GO
 DROP FUNCTION IF EXISTS srb.get_cached_dialog;
+GO
+DROP VIEW IF EXISTS srb.conversations;
 GO
 DROP TYPE IF EXISTS srb.Messages;
 GO
@@ -318,8 +330,8 @@ AS BEGIN
 END
 GO
 
-CREATE OR ALTER PROCEDURE srb.start_dialog
-@dialog_handle UNIQUEIDENTIFIER OUTPUT,
+CREATE OR ALTER PROCEDURE srb.new_conversation
+@conversation_handle UNIQUEIDENTIFIER OUTPUT,
 @sender sysname,
 @receiver sysname,
 @contract sysname = '[DEFAULT]',
@@ -334,27 +346,27 @@ TO SERVICE '", @receiver, "'
 ON CONTRACT ", @contract,"
 WITH ENCRYPTION = ", @encryption);
 
-    EXEC sp_executesql @sql, N'@id uniqueidentifier OUTPUT', @id = @dialog_handle OUTPUT;
+    EXEC sp_executesql @sql, N'@id uniqueidentifier OUTPUT', @id = @conversation_handle OUTPUT;
 END
 GO
 
-CREATE OR ALTER PROCEDURE srb.trigger_dialog
-@dialog UNIQUEIDENTIFIER,
+CREATE OR ALTER PROCEDURE srb.ping
+@conversation_handle UNIQUEIDENTIFIER,
 @delay_s bigint NULL
 AS BEGIN
-	BEGIN CONVERSATION TIMER (@dialog) TIMEOUT = @delay_s; 
+	BEGIN CONVERSATION TIMER (@conversation_handle) TIMEOUT = @delay_s; 
 END
 GO
 
-CREATE OR ALTER PROCEDURE srb.start_conversation
+CREATE OR ALTER PROCEDURE srb.start_dialog
 @sender sysname,
 @receiver sysname,
 @contract sysname = '[DEFAULT]',
 @encryption varchar(3) = 'OFF' --> Keep it off unless if you know how to setup master keys.
 AS BEGIN
 	DECLARE @dialog UNIQUEIDENTIFIER; -- Just to ignore it.
-	EXEC srb.start_dialog
-		@dialog_handle = @dialog OUTPUT,
+	EXEC srb.new_conversation
+		@conversation_handle = @dialog OUTPUT,
 		@sender = @sender,
 		@receiver = @receiver,
 		@contract = @contract,
@@ -363,7 +375,10 @@ AS BEGIN
 END
 GO
 
-CREATE OR ALTER PROCEDURE srb.trigger_conversation
+CREATE SYNONYM srb.start_conversation FOR srb.start_dialog;
+GO
+
+CREATE OR ALTER PROCEDURE srb.trigger_dialog
 @from SYSNAME,
 @to SYSNAME,
 @delay_s bigint NULL
@@ -373,7 +388,7 @@ AS BEGIN
 
 	IF (@dialog IS NULL) BEGIN
 		--PRINT 'Verbose: Starting new dialog';
-		EXEC srb.start_dialog @dialog OUTPUT, @from, @to;
+		EXEC srb.new_conversation @dialog OUTPUT, @from, @to;
 	END
 
 	--PRINT @dialog; 
@@ -381,27 +396,37 @@ AS BEGIN
 END
 GO
 
-CREATE OR ALTER PROCEDURE srb.end_dialog
-@dialog_handle UNIQUEIDENTIFIER,
+CREATE OR ALTER PROCEDURE srb.drop_conversation
+@conversation_handle UNIQUEIDENTIFIER,
 @cleanup bit = 0
 AS BEGIN
 	IF (@cleanup = 0)
-	END CONVERSATION @dialog_handle;
+	END CONVERSATION @conversation_handle;
 	ELSE
-	END CONVERSATION @dialog_handle WITH CLEANUP;
+	END CONVERSATION @conversation_handle WITH CLEANUP;
 END
 GO
+CREATE SYNONYM  srb.drop_dialog FOR srb.drop_conversation;
+GO
+CREATE SYNONYM  srb.delete_dialog FOR srb.drop_conversation;
+GO
+CREATE SYNONYM  srb.delete_conversation FOR srb.drop_conversation;
+GO
 
-CREATE OR ALTER PROCEDURE srb.end_conversation
+CREATE OR ALTER PROCEDURE srb.end_dialog
 @sender sysname,
 @receiver sysname,
 @cleanup bit = 0
 AS BEGIN
 	DECLARE @dialog_handle UNIQUEIDENTIFIER;
 	SET @dialog_handle = srb.get_cached_dialog(@sender, @receiver);
-	EXEC srb.end_dialog @dialog_handle, @cleanup;
+	EXEC srb.drop_conversation @dialog_handle, @cleanup;
 END
 GO
+
+CREATE SYNONYM srb.end_conversation FOR srb.end_dialog;
+GO
+
 -- /END Dialog/Conversation management.
 
 CREATE OR ALTER PROCEDURE srb.post_message
@@ -431,7 +456,7 @@ AS BEGIN
 
 	IF (@dialog IS NULL) BEGIN
 		--PRINT 'Verbose: Starting new dialog';
-		EXEC srb.start_dialog @dialog OUTPUT, @from, @to;
+		EXEC srb.new_conversation @dialog OUTPUT, @from, @to;
 	END
 
 	--PRINT @dialog; 
@@ -677,4 +702,14 @@ from route_info;
 PRINT 'Execute the following script on the remote server instance:'
 PRINT @sql
 END;
+GO
+
+CREATE OR ALTER VIEW srb.conversations AS
+SELECT conversation_handle, source = s.name, target = far_service, 
+		target_instance = far_broker_instance, state = state_desc,
+		target_queue = sq.name,
+		target_activation_procedure = sq.activation_procedure
+FROM sys.conversation_endpoints ce
+JOIN sys.services s ON ce.service_id = s.service_id
+JOIN sys.service_queues sq ON s.service_queue_id = sq.object_id;
 GO
