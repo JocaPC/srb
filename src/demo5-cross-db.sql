@@ -2,13 +2,13 @@ CREATE DATABASE ValidationDB1;
 CREATE DATABASE ValidationDB2;
 
 USE ValidationDB1;
+alter database current set trustworthy on;
 exec srb.create_service 'Sender';
 
 USE ValidationDB2;
 exec srb.create_service 'Receiver';
 
 USE ValidationDB1;
-alter database current set trustworthy on;
 exec srb.send_message 'Sender', 'Receiver', 'Hello test';
 
 exec srb.view_messages 'Sender';
