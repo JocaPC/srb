@@ -69,7 +69,7 @@ ErrorLabel:
 --> Master target setup
 
 
-EXEC("USE master;");
+EXEC("USE master;") AT [TARGET];
 
 EXEC("IF NOT EXISTS(SELECT * FROM master.sys.symmetric_keys WHERE NAME = '##MS_DatabaseMasterKey##')
 BEGIN
