@@ -5,6 +5,19 @@
 DECLARE @name VARCHAR(128)
 DECLARE @SQL VARCHAR(MAX)
 
+
+/* Drop all synonyms */
+
+SELECT @name = (SELECT TOP 1 [name] FROM sys.synonyms WHERE SCHEMA_NAME(schema_id) = 'srb' ORDER BY [name])
+
+WHILE @name IS NOT NULL
+BEGIN
+    SELECT @SQL = 'DROP SYNONYM [srb].[' + RTRIM(@name) +']'
+    EXEC (@SQL)
+    PRINT 'Dropped Synonym: ' + @name
+    SELECT @name = (SELECT TOP 1 [name] FROM sys.synonyms WHERE SCHEMA_NAME(schema_id) = 'srb'  AND [name] > @name ORDER BY [name])
+END
+
 SELECT @name = (SELECT TOP 1 [name] FROM sys.objects WHERE [type] = 'P' AND SCHEMA_NAME(schema_id) = 'srb'  ORDER BY [name])
 
 WHILE @name is not null
@@ -51,7 +64,6 @@ BEGIN
 END
 GO
 
-DROP SYNONYM IF EXISTS srb.start_dialog;
 GO
 DROP TYPE IF EXISTS srb.Messages;
 GO
@@ -70,3 +82,4 @@ END TRY BEGIN CATCH END CATCH
 GO
 
 DROP SCHEMA IF EXISTS srb;
+

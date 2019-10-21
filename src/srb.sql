@@ -1,73 +1,6 @@
 SET QUOTED_IDENTIFIER OFF; -- Because I use "" as a string literal
 GO
-DROP PROCEDURE IF EXISTS srb.create_receiver;
-GO
-DROP PROCEDURE IF EXISTS srb.send_message;
-GO
-DROP PROCEDURE IF EXISTS srb.post_message;
-GO
-DROP PROCEDURE IF EXISTS srb.trigger_dialog;
-GO
-DROP PROCEDURE IF EXISTS srb.ping;
-GO
-DROP PROCEDURE IF EXISTS srb.get_message;
-GO
-DROP PROCEDURE IF EXISTS srb.view_messages;
-GO
-DROP PROCEDURE IF EXISTS srb.view_data;
-GO
-DROP PROCEDURE IF EXISTS srb.send_data;
-GO
-DROP PROCEDURE IF EXISTS srb.post_data;
-GO
-DROP PROCEDURE IF EXISTS srb.get_messages;
-GO
-DROP SYNONYM IF EXISTS srb.start_conversation;
-GO
-DROP PROCEDURE IF EXISTS srb.start_dialog;
-GO
-DROP PROCEDURE IF EXISTS srb.new_conversation;
-GO
-DROP SYNONYM IF EXISTS srb.end_conversation;
-GO
-DROP PROCEDURE IF EXISTS srb.end_dialog;
-GO
-DROP SYNONYM IF EXISTS srb.delete_dialog;
-GO
-DROP SYNONYM IF EXISTS srb.delete_conversation;
-GO
-DROP SYNONYM IF EXISTS srb.drop_dialog;
-GO
-DROP PROCEDURE IF EXISTS srb.drop_conversation;
-GO
-DROP PROCEDURE IF EXISTS srb.create_service;
-GO
-DROP PROCEDURE IF EXISTS srb.create_service_on_queue;
-GO
-DROP PROCEDURE IF EXISTS srb.drop_service;
-GO
-DROP PROCEDURE IF EXISTS srb.init_endpoint;
-GO
-DROP PROCEDURE IF EXISTS srb.drop_endpoint;
-GO
-DROP PROCEDURE IF EXISTS srb.init_remote_access;
-GO
-DROP PROCEDURE IF EXISTS srb.init_remote_proxy_route;
-GO
-DROP FUNCTION IF EXISTS srb.get_cached_dialog;
-GO
-DROP PROCEDURE IF EXISTS srb.kill_all_conversations;
-GO
-DROP VIEW IF EXISTS srb.conversations;
-GO
-DROP TYPE IF EXISTS srb.Messages;
-GO
-DROP TYPE IF EXISTS srb.Strings;
-GO
-DROP TYPE IF EXISTS srb.Integers;
-GO
-DROP SCHEMA IF EXISTS srb;
-GO
+
 CREATE SCHEMA srb;
 GO
 
@@ -529,15 +462,17 @@ GO
 
 
 create or alter procedure
-srb.init_endpoint 
+srb.enable_remote_access 
 		-- by convention, 4022 is used but any number between 1024 and 32767 is valid.
 		@port smallint = 4022,
 		@start_date datetime = NULL,
 		@expiry_date datetime = NULL,
-		@master_password NVARCHAR(200) = NULL
+		@master_password NVARCHAR(200) = NULL,
+		@remote_login NVARCHAR(200) = 'public',
+		@what_if bit = 1
 as begin
 
-DECLARE @c_start_date VARCHAR(20) = CAST(ISNULL(@start_date, GETUTCDATE()) AS VARCHAR(30));
+DECLARE @c_start_date VARCHAR(20) = CAST(ISNULL(@start_date, DATEADD(day, -1, GETUTCDATE())) AS VARCHAR(30));
 DECLARE @c_expiry_date VARCHAR(20) = CAST(ISNULL(@expiry_date, DATEADD(year, 1, GETUTCDATE())) AS VARCHAR(30));
 DECLARe @sql NVARCHAR(MAX);
 
@@ -545,16 +480,24 @@ IF NOT EXISTS(SELECT * FROM master.sys.symmetric_keys WHERE NAME = '##MS_Databas
 BEGIN
 	IF (@master_password IS NULL)
 	BEGIN
+	PRINT('-- MASTER KEY is not found in master database!')
+	PRINT('-- Specify parameter @master_pasword, or')
 	PRINT('-- Create MASTER KEY in master database:')
-	PRINT('USE master;')
-	PRINT('CREATE MASTER KEY ENCRYPTION BY PASSWORD = <Put some strong password here>;')
+	PRINT('/*
+	USE master;')
+	PRINT('CREATE MASTER KEY ENCRYPTION BY PASSWORD = <Put some strong password here>;
+	*/')
 	GOTO ErrorLabel
 	END
-	ELSE
+	ELSE BEGIN
+		IF (@what_if = 0)
 		EXEC("USE master;CREATE MASTER KEY ENCRYPTION BY PASSWORD = '"+@master_password+"'")
+		ELSE
+		PRINT("USE master;CREATE MASTER KEY ENCRYPTION BY PASSWORD = '"+@master_password+"'")
+	END
 END
 ELSE
-	PRINT('MASTER KEY exists in master database.')
+	PRINT('-- MASTER KEY exists in master database.')
 
 
 SET @sql = "USE master;
@@ -570,9 +513,10 @@ WITH
 	-- enables the certifiacte for service broker initiator
 	ACTIVE FOR BEGIN_DIALOG = ON
 ";
-PRINT 'Created Service Broker certificate';
---PRINT @sql;
-EXEC(@sql);
+PRINT '-- Creating Service Broker certificate...';
+
+IF @what_if = 0	EXEC(@sql);
+	ELSE		PRINT (@sql);
 
 SET @sql = "USE master;
 CREATE ENDPOINT ServiceBrokerEndPoint
@@ -589,18 +533,23 @@ CREATE ENDPOINT ServiceBrokerEndPoint
 		-- opposite endpoint specifies either SUPPORTED or REQUIRED.
 		ENCRYPTION = SUPPORTED
 	)";
-PRINT 'Created Service Broker endpoint';
---PRINT @sql;
-EXEC(@sql);
+PRINT '-- Creating Service Broker endpoint...';
 
-EXEC("USE master;GRANT CONNECT ON ENDPOINT::ServiceBrokerEndPoint TO public;")
+IF @what_if = 0	EXEC(@sql);
+	ELSE		PRINT (@sql);
+
+PRINT '-- Enabling login ' + @remote_login + ' to access Service Broker endpoint...';
+IF @remote_login IS NOT NULL
+	IF @what_if = 0
+			EXEC("USE master;GRANT CONNECT ON ENDPOINT::ServiceBrokerEndPoint TO "+@remote_login+";");
+	ELSE 	PRINT("USE master;GRANT CONNECT ON ENDPOINT::ServiceBrokerEndPoint TO "+@remote_login+";")
 
 ErrorLabel:
 end
 go
 
 CREATE PROCEDURE
-srb.drop_endpoint
+srb.remove_remote_access
 AS BEGIN
 
 	declare @service_broker_endpoint sysname, @certificate_name sysname;
@@ -613,10 +562,10 @@ AS BEGIN
 	begin
 		set @sql = 'USE master;DROP ENDPOINT ' + @service_broker_endpoint;
 		exec(@sql);
-		PRINT 'Dropped service broker endpoint in master database';
+		PRINT '-- Dropped service broker endpoint in master database';
 	end
 	else
-		print 'ServiceBroker endpoint don''t exists.';
+		print '-- ServiceBroker endpoint don''t exists.';
 
 	if(@certificate_name is not null)
 	begin
@@ -630,51 +579,61 @@ AS BEGIN
 END
 GO
 
-CREATE PROCEDURE
-srb.init_remote_access 
+-- Procedure that generates script that will initialize login on remote sender instance to access this instance.
+-- Make sure that you have enabled remote access on the instances.
+CREATE OR ALTER PROCEDURE
+srb.init_remote_proxy_login 
 		@login sysname,
-		@password nvarchar(4000)
+		@password nvarchar(4000),
+		@what_if bit = 1
 as begin
 
-declare @sql nvarchar(max) = 'USE master;
-';
+declare @sql nvarchar(max) = '
+USE master;';
 
--- create the login that will be used to send the audited data through the Endpoint
-set @sql += "CREATE LOGIN "+@login+"Login WITH PASSWORD = '"+@password+"';
+-- create the login on remote instance that will be send the data through the Endpoint
+set @sql += "CREATE LOGIN "+@login+" WITH PASSWORD = '"+@password+"';
 ";
 -- Create a user for our login
-set @sql += "CREATE USER "+@login+"User FOR LOGIN "+@login+"Login;
+set @sql += "CREATE USER "+@login+"User FOR LOGIN "+@login+";
 ";
 
 declare @cert_encoded varbinary(max);
-EXEC sp_executesql	N'USE master;SELECT @cert = CERTENCODED(certificate_id) from sys.service_broker_endpoints',
-					N'@cert VARBINARY(MAX) OUTPUT',
-					@cert = @cert_encoded OUTPUT;
+--EXEC sp_executesql	N'USE master;SELECT @cert = CERTENCODED(certificate_id) from sys.service_broker_endpoints',
+--					N'@cert VARBINARY(MAX) OUTPUT',
+--					@cert = @cert_encoded OUTPUT;
+
+SELECT @cert_encoded = CERTENCODED(certificate_id)
+from mastersys.service_broker_endpoints;
 
 if(@cert_encoded is not null)
-set @sql += "CREATE CERTIFICATE "+@login+"RemoteServiceBrokerCertificate 
+set @sql += "CREATE CERTIFICATE "+@login+"ProxyServiceBrokerCertificate 
 		AUTHORIZATION "+@login+"User
 		FROM BINARY = "+CONVERT(VARCHAR(MAX), @cert_encoded, 1)+";
 ";
 else
-	print 'Cannot find the certificate for service endpoint. Run srb.init_endpoint.'
+	print '--> Cannot find the certificate for service endpoint. Run EXEC srb.enable_remote_access'
 
 -- finally grant the connect permissions to login for the endpoint
 set @sql += "
+go
 declare @endpoint_name sysname;
 select @endpoint_name = name
 from sys.service_broker_endpoints sbe;
 
-declare @sql nvarchar(max);
-set @sql = 'GRANT CONNECT ON ENDPOINT::'+@endpoint_name+' TO "+@login+"Login';
-exec(@sql);";
+-- Enable sender login on remote (sender) instance to connect to sender endpoint:
+declare @sql = 'GRANT CONNECT ON ENDPOINT::' +@endpoint_name+ ' TO "+@login+"';
 
-PRINT 'Execute the following script on the remote server instance:'
+EXEC(sql);
+";
+
+PRINT '--> Execute the following script on the remote server instance:'
 PRINT @sql
 
 end
 GO
 
+-- Initialize route on the sender instance.
 CREATE PROCEDURE srb.init_remote_proxy_route 
 	@service SYSNAME,
 	@address varchar(256) = NULL,
