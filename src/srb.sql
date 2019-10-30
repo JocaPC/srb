@@ -56,8 +56,33 @@ AS BEGIN
 			throw 60001, @error1, 1; 
 		end
 
+	END;
+
+	SET @sql = CONCAT('CREATE QUEUE ', @queue, ' WITH STATUS = ON');
+	EXEC(@sql);
+
+	IF (@callback IS NOT NULL OR @trigger IS NOT NULL) BEGIN
+
+		DECLARE @msgtype varchar(30) = (select top 1 case t.name when 'xml' then 'xml' else t.name + '(max)' end
+		from sys.parameters p
+			join sys.objects o
+				on p.object_id = o.object_id
+			join sys.types t
+				on p.system_type_id = t.system_type_id
+				and p.user_type_id = t.user_type_id
+		where (schema_name(o.schema_id) + '.' + object_name(o.object_id)) = @callback
+		and parameter_id = 1
+		--and t.user_type_id in (165, 231)
+		);
+
+		PRINT 'Callback message type is ' + @msgtype;
+
+		DECLARE @bulk_receive bit = 0;
+		IF( @msgtype = 'Messages(MAX)')
+			SET @bulk_receive = 1;
+
 		-- Checking the signature (parameter types) of callback procedure.
-		if( 
+		if( @bulk_receive = 0 and 
 		(select count(*)
 		from sys.parameters p
 			join sys.objects o
@@ -76,24 +101,8 @@ AS BEGIN
 			declare @error2 nvarchar(4000) = 'Procedure ' + @callback + ' exists, but it don''t have parameters (varbinary(max), nvarchar, uniqueidentifier)';
 			throw 60001, @error2, 2; 
 		end
-	END;
 
-	SET @sql = CONCAT('CREATE QUEUE ', @queue, ' WITH STATUS = ON');
-	EXEC(@sql);
 
-	IF (@callback IS NOT NULL OR @trigger IS NOT NULL) BEGIN
-
-		DECLARE @msgtype varchar(30) = (select top 1 case t.name when 'xml' then 'xml' else t.name + '(max)' end
-		from sys.parameters p
-			join sys.objects o
-				on p.object_id = o.object_id
-			join sys.types t
-				on p.system_type_id = t.system_type_id
-		where (schema_name(o.schema_id) + '.' + object_name(o.object_id)) = @callback
-		and parameter_id = 1
-		and t.user_type_id in (165, 231));
-
-		PRINT 'Callback message type is ' + @msgtype;
 
 		SET @sql = CONCAT("
 CREATE PROCEDURE ",@queue,"ActivationProcedure
@@ -101,20 +110,29 @@ AS BEGIN
 	DECLARE @dialog UNIQUEIDENTIFIER;
 	DECLARE @msg VARBINARY(MAX);
 	DECLARE @msg_type sysname;
+	DECLARE @messages srb.Messages;
      
 	WHILE (1=1)
 	BEGIN
      
 		BEGIN TRANSACTION;
-         
+",
+		IIF(@bulk_receive = 0, "
 		WAITFOR (
 			RECEIVE TOP(1)
 				@dialog = conversation_handle,
 				@msg = message_body,
 				@msg_type = message_type_name
-			FROM ",@queue,"
+			FROM " +@queue+"
 		), TIMEOUT 5000;
-             
+",
+"
+		WAITFOR (
+			RECEIVE *
+			FROM " +@queue+"
+			INTO @messages
+		), TIMEOUT 5000;
+"),"             
 		IF (@@ROWCOUNT = 0)
 		BEGIN
 				ROLLBACK TRANSACTION;
@@ -172,9 +190,15 @@ AS BEGIN
 			BEGIN TRY",  
 			CASE 
 				WHEN @callback IS NOT NULL THEN
-				CONCAT("-- Execute a callback and provide message info.
-				DECLARE @p ",@msgtype," = CAST(@msg AS ",@msgtype,");
-				EXEC ", @callback, " @p, @msg_type, @dialog;")
+				CASE @bulk_receive 
+					WHEN 0 THEN
+					CONCAT("-- Execute a callback and provide message info.
+						DECLARE @p ",@msgtype," = CAST(@msg AS ",@msgtype,");
+						EXEC ", @callback, " @p, @msg_type, @dialog;")
+					ELSE
+					CONCAT("-- Execute a callback and provide message info.
+						EXEC ", @callback, " @messages;")
+				END
 				ELSE CONCAT(" -- Log message
 				RAISERROR( 'Un-processed message in service ",@name, "', 6, 1) WITH LOG; ")
 			END,"	
