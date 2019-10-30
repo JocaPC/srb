@@ -38,7 +38,8 @@ CREATE OR ALTER PROCEDURE srb.create_service
 @name sysname, 
 @callback nvarchar(256) = NULL, 
 @contract sysname = '[DEFAULT]',
-@trigger nvarchar(256) = NULL
+@trigger nvarchar(256) = NULL,
+@use_transaction bit = 1
 AS BEGIN
 
 	-- Creates a Service including a new queue. Will use 'DefaultContact' if the contract is not specified.
@@ -104,9 +105,9 @@ AS BEGIN
      
 	WHILE (1=1)
 	BEGIN
-     
-		BEGIN TRANSACTION;
-         
+		",     
+		IIF(@use_transaction=1, "BEGIN TRANSACTION;", "/*No transaction*/")
+,"
 		WAITFOR (
 			RECEIVE TOP(1)
 				@dialog = conversation_handle,
@@ -117,7 +118,9 @@ AS BEGIN
              
 		IF (@@ROWCOUNT = 0)
 		BEGIN
-				ROLLBACK TRANSACTION;
+			",     
+		IIF(@use_transaction=1, "ROLLBACK TRANSACTION;", "/*No transaction*/")
+,"				
 				BREAK;
 		END
          
