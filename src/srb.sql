@@ -25,11 +25,15 @@ GO
 CREATE OR ALTER PROCEDURE srb.create_service_on_queue
 @name sysname, 
 @queue sysname, 
-@contract sysname = '[DEFAULT]'
+@contract sysname = '[DEFAULT]',
+@whatif bit = 1
 AS BEGIN
 -- Creates a Service on the existing queue. Will use 'DefaultContact' if the contract is not specified.
     DECLARE @sql NVARCHAR(MAX);
     SET @sql = CONCAT('CREATE SERVICE ', @name, ' ON QUEUE ', @queue, ' (', @contract, ')');
+	IF(@whatif = 1)
+	PRINT(@sql);
+	ELSE
 	EXEC(@sql);
 END;
 GO
@@ -39,7 +43,9 @@ CREATE OR ALTER PROCEDURE srb.create_service
 @callback nvarchar(256) = NULL, 
 @contract sysname = '[DEFAULT]',
 @trigger nvarchar(256) = NULL,
-@use_transaction bit = 1
+@use_transaction bit = 1,
+@remus bit = 0,
+@whatif bit = 0
 AS BEGIN
 
 	-- Creates a Service including a new queue. Will use 'DefaultContact' if the contract is not specified.
@@ -80,6 +86,12 @@ AS BEGIN
 	END;
 
 	SET @sql = CONCAT('CREATE QUEUE ', @queue, ' WITH STATUS = ON');
+
+	IF(@whatif = 1) BEGIN
+	PRINT(@sql);
+	PRINT('
+GO')
+	END ELSE
 	EXEC(@sql);
 
 	IF (@callback IS NOT NULL OR @trigger IS NOT NULL) BEGIN
@@ -94,37 +106,92 @@ AS BEGIN
 		and parameter_id = 1
 		and t.user_type_id in (165, 231));
 
-		PRINT 'Callback message type is ' + @msgtype;
+		PRINT '--> Callback message type is ' + @msgtype;
 
 		SET @sql = CONCAT("
 CREATE PROCEDURE ",@queue,"ActivationProcedure
-AS BEGIN
+AS BEGIN",
+IIF(@remus = 1, "
+
+DECLARE @tableMessages TABLE (
+
+queuing_order BIGINT,
+
+conversation_handle UNIQUEIDENTIFIER,
+
+message_type_name SYSNAME,
+
+message_body VARBINARY(MAX));
+
+-- Create cursor over the table variable
+-- Use the queueing_order column to
+-- preserve the message order
+
+DECLARE cursorMessages
+
+CURSOR FORWARD_ONLY READ_ONLY
+
+FOR SELECT conversation_handle,
+
+message_type_name,
+
+message_body
+
+FROM @tableMessages
+
+ORDER BY queuing_order;
+
+", "")
+,"
 	DECLARE @dialog UNIQUEIDENTIFIER;
 	DECLARE @msg VARBINARY(MAX);
 	DECLARE @msg_type sysname;
-     
-	WHILE (1=1)
+",     
+	IIF(@remus=1, "", "WHILE (1=1)"), -- Remus is not using WHILE around RECEIVE
+	"
 	BEGIN
 		",     
 		IIF(@use_transaction=1, "BEGIN TRANSACTION;", "/*No transaction*/")
 ,"
 		WAITFOR (
-			RECEIVE TOP(1)
+			RECEIVE ",
+			IIF(@remus = 0, " TOP(1) 
 				@dialog = conversation_handle,
 				@msg = message_body,
-				@msg_type = message_type_name
-			FROM ",@queue,"
+				@msg_type = message_type_name ",
+				-- Remus will take them all
+				" queuing_order, conversation_handle, message_type_name, message_body"), "
+			FROM ",@queue,
+			IIF(@remus = 1, " INTO @tableMessages ", ""), -- Remus will put all into table variable
+			"
 		), TIMEOUT 5000;
-             
-		IF (@@ROWCOUNT = 0)
+",
+		-- Remus don't needs transaction/break
+		IIF(@remus=0, "IF (@@ROWCOUNT = 0)
 		BEGIN
-			",     
-		IIF(@use_transaction=1, "ROLLBACK TRANSACTION;", "/*No transaction*/")
-,"				
-				BREAK;
-		END
-         
-		IF @msg_type =
+			"+     
+			IIF(@use_transaction=1, "ROLLBACK TRANSACTION;", "/*No transaction*/")+
+			" BREAK; 
+		END",""),
+
+         IIF(@remus=0,"","
+		 -- Remus will open cursor:
+		 OPEN cursorMessages;
+
+		WHILE (1=1)
+
+		BEGIN
+
+		FETCH NEXT FROM cursorMessages
+
+		INTO @dialog, @msg_type, @msg;
+
+		IF (@@FETCH_STATUS != 0)
+
+		BREAK;
+		 
+		 ")
+		,"IF @msg_type =
 				N'http://schemas.microsoft.com/SQL/ServiceBroker/DialogTimer'
 		BEGIN
 			BEGIN TRY ",
@@ -202,10 +269,28 @@ AS BEGIN
 			END CATCH;  
 		END  
 		IF @@TRANCOUNT > 0
+			COMMIT TRANSACTION;",
+IIF(@remus = 0, "",
+"		CLOSE cursorMessages;
+
+		DELETE FROM @tableMessages;
+
+		IF @@TRANCOUNT > 0
 			COMMIT TRANSACTION;
+
+		END
+
+		DEALLOCATE cursorMessages;"
+)
+
+,"
 	END --WHILE 1=1
 END");
-		--PRINT @sql;
+		IF(@whatif = 1) BEGIN
+		PRINT(@sql);
+		PRINT('
+GO')
+		END ELSE
 		EXEC(@sql);
 
 		SET @sql = CONCAT("ALTER QUEUE ", @queue, " WITH
@@ -215,12 +300,16 @@ END");
 				EXECUTE AS 'dbo',
 				MAX_QUEUE_READERS = 1)");
 
-		--PRINT @sql;
+		IF(@whatif = 1) BEGIN
+		PRINT(@sql);
+		PRINT('
+GO')
+		END ELSE
 		EXEC(@sql);
 
 	END -- callback
 		
-    EXEC srb.create_service_on_queue @name, @queue, @contract;
+    EXEC srb.create_service_on_queue @name, @queue, @contract, @whatif;
 
 END
 GO
