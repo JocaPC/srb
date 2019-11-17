@@ -1,5 +1,7 @@
+use test;
+go
 SET QUOTED_IDENTIFIER OFF; -- Because I use "" as a string literal
-GO
+go
 
 CREATE SCHEMA srb;
 GO
@@ -172,7 +174,7 @@ ORDER BY queuing_order;
 			"+     
 			IIF(@use_transaction=1, "ROLLBACK TRANSACTION;", "/*No transaction*/")+
 			" BREAK; 
-		END",""),
+		END "," "),
 
          IIF(@remus=0,"","
 		 -- Remus will open cursor:
@@ -191,7 +193,9 @@ ORDER BY queuing_order;
 		BREAK;
 		 
 		 ")
-		,"IF @msg_type =
+		,"
+
+		IF @msg_type =
 				N'http://schemas.microsoft.com/SQL/ServiceBroker/DialogTimer'
 		BEGIN
 			BEGIN TRY ",

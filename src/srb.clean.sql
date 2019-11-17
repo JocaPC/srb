@@ -1,3 +1,5 @@
+use Test;
+go
 --------------------------------------------------------------------------------
 --	SQL Server & Azure SQL Managed Instance - SeRvice Broker library
 --	Author: Jovan Popovic
