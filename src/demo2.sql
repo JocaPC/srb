@@ -1,4 +1,4 @@
-use hk
+use Test
 go
 -- Cleanup: drops created services             
 exec srb.drop_service 'EchoService'
@@ -37,17 +37,17 @@ exec srb.post_message @dialog, N'Mike'
 exec srb.post_message @dialog, N'Hrkljush'
 --> EchoService will reply to Sender.
 go
--- Looks inside the 'SenderService' service to see the reply.
+-- Look inside the 'SenderService' service to see the reply.
 exec srb.view_messages 'SenderService'
 exec srb.view_messages 'EchoService'
 select * from sys.transmission_queue
 
--- Takes the message from the 'SenderService' service
+-- Take the message from the 'SenderService' service
 declare @msg NVARCHAR(MAX);
 exec srb.get_message 'SenderService', @msg output;
 select 'Replied mesage: ' + @msg
 
--- Checks whether there's some message in the service. There should be none.
+-- Check whether there's some message in the service. There should be none.
 exec srb.view_messages 'SenderService'
 go
 

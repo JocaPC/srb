@@ -275,15 +275,10 @@ ORDER BY queuing_order;
 		IF @@TRANCOUNT > 0
 			COMMIT TRANSACTION;",
 IIF(@remus = 0, "",
-"		CLOSE cursorMessages;
-
-		DELETE FROM @tableMessages;
-
-		IF @@TRANCOUNT > 0
-			COMMIT TRANSACTION;
-
+"
 		END
-
+		CLOSE cursorMessages;
+		DELETE FROM @tableMessages;
 		DEALLOCATE cursorMessages;"
 )
 
