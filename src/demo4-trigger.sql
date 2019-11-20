@@ -1,3 +1,7 @@
+use Test;
+go
+exec srb.drop_service 'Sender';
+exec srb.drop_service 'Receiver';
 go
 create or alter procedure dbo.send_current_time @dialog uniqueidentifier
 as begin

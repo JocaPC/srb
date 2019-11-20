@@ -695,7 +695,7 @@ declare @cert_encoded varbinary(max);
 --					@cert = @cert_encoded OUTPUT;
 
 SELECT @cert_encoded = CERTENCODED(certificate_id)
-from mastersys.service_broker_endpoints;
+from master.sys.service_broker_endpoints;
 
 if(@cert_encoded is not null)
 set @sql += "CREATE CERTIFICATE "+@login+"ProxyServiceBrokerCertificate 

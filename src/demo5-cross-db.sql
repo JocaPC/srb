@@ -1,5 +1,15 @@
-CREATE DATABASE ValidationDB1;
-CREATE DATABASE ValidationDB2;
+--CREATE DATABASE ValidationDB1;
+--CREATE DATABASE ValidationDB2;
+
+
+USE ValidationDB1;
+exec srb.drop_service 'Sender';
+
+USE ValidationDB2;
+exec srb.drop_service 'Receiver';
+
+
+
 
 USE ValidationDB1;
 alter database current set trustworthy on;

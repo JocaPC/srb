@@ -1,4 +1,4 @@
-
+USE Test;
 go
 -- Cleanup: drops created services             
 exec srb.drop_service 'EchoService'
