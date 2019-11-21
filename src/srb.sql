@@ -1,5 +1,4 @@
-use test;
-go
+
 SET QUOTED_IDENTIFIER OFF; -- Because I use "" as a string literal
 go
 
@@ -553,21 +552,25 @@ GO
 
 
 create or alter procedure
-srb.enable_remote_access 
+srb.init_global_ssb 
 		-- by convention, 4022 is used but any number between 1024 and 32767 is valid.
 		@port smallint = 4022,
 		@start_date datetime = NULL,
 		@expiry_date datetime = NULL,
 		@master_password NVARCHAR(200) = NULL,
-		@remote_login NVARCHAR(200) = 'public',
 		@what_if bit = 1
 as begin
 
+PRINT('--> This script will initialize cross-instance SqlServiceBroker, by initializing the following objects in [master] database:');
+PRINT('--> MASTER KEY if @master_password is specified.');
+PRINT('--> CERTIFICATE ServiceBrokerCertificate that will be used to encrypt SSB communication.');
+PRINT('--> ENDPOINT ServiceBrokerEndPoint.');
+
 DECLARE @c_start_date VARCHAR(20) = CAST(ISNULL(@start_date, DATEADD(day, -1, GETUTCDATE())) AS VARCHAR(30));
 DECLARE @c_expiry_date VARCHAR(20) = CAST(ISNULL(@expiry_date, DATEADD(year, 1, GETUTCDATE())) AS VARCHAR(30));
-DECLARe @sql NVARCHAR(MAX);
+DECLARE @sql NVARCHAR(MAX);
 
-IF NOT EXISTS(SELECT * FROM master.sys.symmetric_keys WHERE NAME = '##MS_DatabaseMasterKey##')
+IF NOT EXISTS(SELECT * FROM sys.symmetric_keys WHERE NAME = '##MS_DatabaseMasterKey##')
 BEGIN
 	IF (@master_password IS NULL)
 	BEGIN
@@ -576,7 +579,7 @@ BEGIN
 	PRINT('-- Create MASTER KEY in master database:')
 	PRINT('/*
 	USE master;')
-	PRINT('CREATE MASTER KEY ENCRYPTION BY PASSWORD = <Put some strong password here>;
+	PRINT('	CREATE MASTER KEY ENCRYPTION BY PASSWORD = <Put some strong password here>;
 	*/')
 	GOTO ErrorLabel
 	END
@@ -629,18 +632,28 @@ PRINT '-- Creating Service Broker endpoint...';
 IF @what_if = 0	EXEC(@sql);
 	ELSE		PRINT (@sql);
 
-PRINT '-- Enabling login ' + @remote_login + ' to access Service Broker endpoint...';
-IF @remote_login IS NOT NULL
+ErrorLabel:
+end
+go
+
+-- Enables login to access SSB endpoint.
+create or alter procedure
+srb.grant_access
+		@login NVARCHAR(200) = 'public',
+		@what_if bit = 1
+as begin
+PRINT '-- Enabling login ' + @login + ' to access Service Broker endpoint...';
+IF @login IS NOT NULL
 	IF @what_if = 0
-			EXEC("USE master;GRANT CONNECT ON ENDPOINT::ServiceBrokerEndPoint TO "+@remote_login+";");
-	ELSE 	PRINT("USE master;GRANT CONNECT ON ENDPOINT::ServiceBrokerEndPoint TO "+@remote_login+";")
+			EXEC("USE master;GRANT CONNECT ON ENDPOINT::ServiceBrokerEndPoint TO "+@login+";");
+	ELSE 	PRINT("USE master;GRANT CONNECT ON ENDPOINT::ServiceBrokerEndPoint TO "+@login+";")
 
 ErrorLabel:
 end
 go
 
-CREATE PROCEDURE
-srb.remove_remote_access
+CREATE OR ALTER PROCEDURE
+srb.disable_global_ssb
 AS BEGIN
 
 	declare @service_broker_endpoint sysname, @certificate_name sysname;
@@ -670,23 +683,36 @@ AS BEGIN
 END
 GO
 
--- Procedure that generates script that will initialize login on remote sender instance to access this instance.
--- Make sure that you have enabled remote access on the instances.
+-- Procedure that generates script that will initialize proxy login on remote sender instance
+-- to access this instance.
+-- Make sure that you have enabled initialied global access on the instances.
+-- Run this procedure on initialized target/receiver instance.
+-- Execute generated script on initiated sender/source/initiator instance.
 CREATE OR ALTER PROCEDURE
-srb.init_remote_proxy_login 
+srb.generate_remote_proxy_login_creation_script
 		@login sysname,
-		@password nvarchar(4000),
-		@what_if bit = 1
+		@password nvarchar(4000)
 as begin
+
+print ''
 
 declare @sql nvarchar(max) = '
 USE master;';
 
--- create the login on remote instance that will be send the data through the Endpoint
-set @sql += "CREATE LOGIN "+@login+" WITH PASSWORD = '"+@password+"';
+-- create the login on remote instance that will send the data through the Endpoint
+set @sql += "
+BEGIN TRY
+DROP USER IF EXISTS "+@login+"User;
+DROP LOGIN "+@login+";
+END TRY BEGIN CATCH END CATCH
+";
+
+set @sql += "
+CREATE LOGIN "+@login+" WITH PASSWORD = '"+@password+"';
 ";
 -- Create a user for our login
-set @sql += "CREATE USER "+@login+"User FOR LOGIN "+@login+";
+set @sql += "
+CREATE USER "+@login+"User FOR LOGIN "+@login+";
 ";
 
 declare @cert_encoded varbinary(max);
@@ -698,12 +724,13 @@ SELECT @cert_encoded = CERTENCODED(certificate_id)
 from master.sys.service_broker_endpoints;
 
 if(@cert_encoded is not null)
-set @sql += "CREATE CERTIFICATE "+@login+"ProxyServiceBrokerCertificate 
-		AUTHORIZATION "+@login+"User
-		FROM BINARY = "+CONVERT(VARCHAR(MAX), @cert_encoded, 1)+";
+set @sql += "
+CREATE CERTIFICATE "+@login+"ProxyServiceBrokerCertificate 
+	AUTHORIZATION "+@login+"User
+	FROM BINARY = "+CONVERT(VARCHAR(MAX), @cert_encoded, 1)+";
 ";
 else
-	print '--> Cannot find the certificate for service endpoint. Run EXEC srb.enable_remote_access'
+	print '--> Cannot find the certificate for service endpoint. Run EXEC srb.init_global_ssb'
 
 -- finally grant the connect permissions to login for the endpoint
 set @sql += "
@@ -713,27 +740,31 @@ select @endpoint_name = name
 from sys.service_broker_endpoints sbe;
 
 -- Enable sender login on remote (sender) instance to connect to sender endpoint:
-declare @sql = 'GRANT CONNECT ON ENDPOINT::' +@endpoint_name+ ' TO "+@login+"';
+declare @sql NVARCHAR(MAX) = 'GRANT CONNECT ON ENDPOINT::' +@endpoint_name+ ' TO "+@login+"';
 
-EXEC(sql);
+EXEC(@sql);
 ";
 
-PRINT '--> Execute the following script on the remote server instance:'
+PRINT '--> Execute the following script on the remote sender/initiator/source instance:'
 PRINT @sql
 
 end
 GO
 
 -- Initialize route on the sender instance.
-CREATE PROCEDURE srb.init_remote_proxy_route 
-	@service SYSNAME,
-	@address varchar(256) = NULL,
+-- Run this procedure on target/receiver instance
+-- Copy and run generated script on source/initiator instance.
+CREATE OR ALTER PROCEDURE srb.generate_proxy_route_script 
+	@target_service SYSNAME,
+	@target_address varchar(256) = NULL, -- OR 'LOCAL' for intra-instance routes.
+	@source_database SYSNAME,
 	@authorization sysname = 'dbo'
 AS BEGIN
 declare @sql NVARCHAR(MAX);
 
 with route_info as (
-select db_name = DB_NAME(DB_ID()), service_name = @service,
+select	db_name = DB_NAME(DB_ID()),
+		service_name = @target_service,
 		sb_guid = (select service_broker_guid from sys.databases where name = DB_NAME(DB_ID())), 
 		protocol = te.protocol_desc,
 		server = isnull(ip_address, CAST(serverproperty('servername') as varchar(256))),
@@ -741,17 +772,20 @@ select db_name = DB_NAME(DB_ID()), service_name = @service,
 from sys.service_broker_endpoints sbe
 	join sys.tcp_endpoints te on sbe.endpoint_id = te.endpoint_id
 where sbe.type = 3 -- SERVICE_BROKER
-and EXISTS(SELECT * FROM sys.services WHERE name = @service)
+and EXISTS(SELECT * FROM sys.services WHERE name = @target_service)
 )
-select @sql = CONCAT("CREATE ROUTE [", server, "/", db_name, "/", service_name , "] AUTHORIZATION [",@authorization,"] 
+
+select @sql = CONCAT("USE ",@source_database,";
+
+CREATE ROUTE [", server, "/", db_name, "/", service_name , "] AUTHORIZATION [",@authorization,"] 
 WITH SERVICE_NAME = N'",service_name,"' ,
 		BROKER_INSTANCE = N'",sb_guid,"' , 
 		ADDRESS = N'",
-		ISNULL(@address, CONCAT(protocol,"://",server,":",port)),
+		ISNULL(@target_address, CONCAT(protocol,"://",server,":",port)),
 		"'-- OR 'LOCAL' for intra-instance routes.")
 from route_info;
 
-PRINT 'Execute the following script on the remote server instance:'
+PRINT '-->	Execute the following script on the remote sender/source instance:'
 PRINT @sql
 END;
 GO
