@@ -360,7 +360,7 @@ CREATE OR ALTER PROCEDURE srb.new_conversation
 @sender sysname,
 @receiver sysname,
 @contract sysname = '[DEFAULT]',
-@encryption varchar(3) = 'OFF' --> Keep it off unless if you know how to setup master keys.
+@encryption varchar(3) = 'ON' --> Keep it off unless if you know how to setup master keys.
 AS BEGIN
     DECLARE @sql NVARCHAR(MAX);
 
@@ -463,7 +463,7 @@ AS BEGIN
 END
 GO
 
-CREATE OR ALTER PROCEDURE srb.post_data
+CREATE OR ALTER PROCEDURE srb.post
 @dialog UNIQUEIDENTIFIER,
 @data VARBINARY(MAX)
 AS BEGIN;
@@ -490,7 +490,7 @@ AS BEGIN
 END
 GO
 
-CREATE OR ALTER PROCEDURE srb.send_data
+CREATE OR ALTER PROCEDURE srb.send
 @from SYSNAME,
 @to SYSNAME,
 @message VARBINARY(MAX)
@@ -585,9 +585,15 @@ BEGIN
 	END
 	ELSE BEGIN
 		IF (@what_if = 0)
-		EXEC("USE master;CREATE MASTER KEY ENCRYPTION BY PASSWORD = '"+@master_password+"'")
+		EXEC("USE master;
+IF (select Count(*) from sys.symmetric_keys where name like '%DatabaseMasterKey%') = 0
+	CREATE MASTER KEY ENCRYPTION BY PASSWORD = '"+@master_password+"';
+")
 		ELSE
-		PRINT("USE master;CREATE MASTER KEY ENCRYPTION BY PASSWORD = '"+@master_password+"'")
+		PRINT("USE master;
+IF (select Count(*) from sys.symmetric_keys where name like '%DatabaseMasterKey%') = 0
+	CREATE MASTER KEY ENCRYPTION BY PASSWORD = '"+@master_password+"';
+")
 	END
 END
 ELSE
@@ -613,6 +619,11 @@ IF @what_if = 0	EXEC(@sql);
 	ELSE		PRINT (@sql);
 
 SET @sql = "USE master;
+
+BEGIN TRY
+	DROP ENDPOINT ServiceBrokerEndPoint;
+END TRY BEGIN CATCH END CATCH
+
 CREATE ENDPOINT ServiceBrokerEndPoint
 	-- set endpoint to activly listen for connections
 	STATE = STARTED
@@ -626,7 +637,8 @@ CREATE ENDPOINT ServiceBrokerEndPoint
 		-- SUPPORTED means that the data is encrypted only if the 
 		-- opposite endpoint specifies either SUPPORTED or REQUIRED.
 		ENCRYPTION = SUPPORTED
-	)";
+	)
+";
 PRINT '-- Creating Service Broker endpoint...';
 
 IF @what_if = 0	EXEC(@sql);
@@ -645,8 +657,10 @@ as begin
 PRINT '-- Enabling login ' + @login + ' to access Service Broker endpoint...';
 IF @login IS NOT NULL
 	IF @what_if = 0
-			EXEC("USE master;GRANT CONNECT ON ENDPOINT::ServiceBrokerEndPoint TO "+@login+";");
-	ELSE 	PRINT("USE master;GRANT CONNECT ON ENDPOINT::ServiceBrokerEndPoint TO "+@login+";")
+			EXEC("USE master;
+GRANT CONNECT ON ENDPOINT::ServiceBrokerEndPoint TO "+@login+";");
+	ELSE 	PRINT("USE master;
+GRANT CONNECT ON ENDPOINT::ServiceBrokerEndPoint TO "+@login+";")
 
 ErrorLabel:
 end
@@ -664,7 +678,8 @@ AS BEGIN
 
 	if(@service_broker_endpoint is not null)
 	begin
-		set @sql = 'USE master;DROP ENDPOINT ' + @service_broker_endpoint;
+		set @sql = 'USE master;
+DROP ENDPOINT ' + @service_broker_endpoint;
 		exec(@sql);
 		PRINT '-- Dropped service broker endpoint in master database';
 	end
@@ -725,6 +740,10 @@ from master.sys.service_broker_endpoints;
 
 if(@cert_encoded is not null)
 set @sql += "
+BEGIN TRY
+	DROP CERTIFICATE "+@login+"ProxyServiceBrokerCertificate;
+END TRY BEGIN CATCH END CATCH
+GO
 CREATE CERTIFICATE "+@login+"ProxyServiceBrokerCertificate 
 	AUTHORIZATION "+@login+"User
 	FROM BINARY = "+CONVERT(VARCHAR(MAX), @cert_encoded, 1)+";
@@ -781,7 +800,7 @@ CREATE ROUTE [", server, "/", db_name, "/", service_name , "] AUTHORIZATION [",@
 WITH SERVICE_NAME = N'",service_name,"' ,
 		BROKER_INSTANCE = N'",sb_guid,"' , 
 		ADDRESS = N'",
-		ISNULL(@target_address, CONCAT(protocol,"://",server,":",port)),
+		ISNULL(CONCAT(protocol,"://",@target_address,":",port), CONCAT(protocol,"://",server,":",port)),
 		"'-- OR 'LOCAL' for intra-instance routes.")
 from route_info;
 
