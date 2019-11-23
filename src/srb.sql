@@ -46,7 +46,8 @@ CREATE OR ALTER PROCEDURE srb.create_service
 @trigger nvarchar(256) = NULL,
 @use_transaction bit = 1,
 @remus bit = 0,
-@whatif bit = 0
+@whatif bit = 0,
+@max_readers tinyint = 1
 AS BEGIN
 
 	-- Creates a Service including a new queue. Will use 'DefaultContact' if the contract is not specified.
@@ -296,7 +297,7 @@ GO')
 				STATUS = ON,   
 				PROCEDURE_NAME = ",@queue,"ActivationProcedure,
 				EXECUTE AS 'dbo',
-				MAX_QUEUE_READERS = 1)");
+				MAX_QUEUE_READERS = ", @max_readers ,")");
 
 		IF(@whatif = 1) BEGIN
 		PRINT(@sql);
@@ -360,7 +361,7 @@ CREATE OR ALTER PROCEDURE srb.new_conversation
 @sender sysname,
 @receiver sysname,
 @contract sysname = '[DEFAULT]',
-@encryption varchar(3) = 'ON' --> Keep it off unless if you know how to setup master keys.
+@encryption varchar(3) = 'OFF' --> Keep it off unless if you know how to setup master keys.
 AS BEGIN
     DECLARE @sql NVARCHAR(MAX);
 
@@ -552,7 +553,7 @@ GO
 
 
 create or alter procedure
-srb.init_global_ssb 
+srb.init_endpoint 
 		-- by convention, 4022 is used but any number between 1024 and 32767 is valid.
 		@port smallint = 4022,
 		@start_date datetime = NULL,
@@ -561,10 +562,19 @@ srb.init_global_ssb
 		@what_if bit = 1
 as begin
 
+PRINT('');
+PRINT('');
+PRINT('-----------------------------------------------------------------------------------------------------------------------------');
+PRINT('--');
 PRINT('--> This script will initialize cross-instance SqlServiceBroker, by initializing the following objects in [master] database:');
 PRINT('--> MASTER KEY if @master_password is specified.');
 PRINT('--> CERTIFICATE ServiceBrokerCertificate that will be used to encrypt SSB communication.');
 PRINT('--> ENDPOINT ServiceBrokerEndPoint.');
+PRINT('--');
+PRINT('-----------------------------------------------------------------------------------------------------------------------------');
+PRINT('');
+PRINT('');
+
 
 DECLARE @c_start_date VARCHAR(20) = CAST(ISNULL(@start_date, DATEADD(day, -1, GETUTCDATE())) AS VARCHAR(30));
 DECLARE @c_expiry_date VARCHAR(20) = CAST(ISNULL(@expiry_date, DATEADD(year, 1, GETUTCDATE())) AS VARCHAR(30));
@@ -610,7 +620,7 @@ WITH
 	START_DATE = '"+@c_start_date+"', 
 	-- set the expiry data
     EXPIRY_DATE = '"+@c_expiry_date+"'
-	-- enables the certifiacte for service broker initiator
+	-- enables the certificate for service broker initiator
 	ACTIVE FOR BEGIN_DIALOG = ON
 ";
 PRINT '-- Creating Service Broker certificate...';
@@ -619,10 +629,6 @@ IF @what_if = 0	EXEC(@sql);
 	ELSE		PRINT (@sql);
 
 SET @sql = "USE master;
-
-BEGIN TRY
-	DROP ENDPOINT ServiceBrokerEndPoint;
-END TRY BEGIN CATCH END CATCH
 
 CREATE ENDPOINT ServiceBrokerEndPoint
 	-- set endpoint to activly listen for connections
@@ -654,7 +660,7 @@ srb.grant_access
 		@login NVARCHAR(200) = 'public',
 		@what_if bit = 1
 as begin
-PRINT '-- Enabling login ' + @login + ' to access Service Broker endpoint...';
+PRINT '-- Enabling login ' + @login + ' to connect to Service Broker endpoint...';
 IF @login IS NOT NULL
 	IF @what_if = 0
 			EXEC("USE master;
@@ -667,33 +673,40 @@ end
 go
 
 CREATE OR ALTER PROCEDURE
-srb.disable_global_ssb
+srb.disable_endpoint @what_if bit = 0
 AS BEGIN
 
 	declare @service_broker_endpoint sysname, @certificate_name sysname;
 	declare @sql nvarchar(max);
 	select @service_broker_endpoint = sbe.name, @certificate_name = c.name
-	from sys.service_broker_endpoints sbe
+	from master.sys.service_broker_endpoints sbe
 	left join master.sys.certificates c on sbe.certificate_id = c.certificate_id
 
 	if(@service_broker_endpoint is not null)
 	begin
 		set @sql = 'USE master;
 DROP ENDPOINT ' + @service_broker_endpoint;
-		exec(@sql);
-		PRINT '-- Dropped service broker endpoint in master database';
+		IF @what_if = 0 BEGIN
+			exec(@sql);
+			PRINT '-- Dropped service broker endpoint in master database';
+		END ELSE
+			PRINT (@sql)
 	end
 	else
 		print '-- ServiceBroker endpoint don''t exists.';
 
 	if(@certificate_name is not null)
 	begin
-		set @sql = 'USE master;DROP CERTIFICATE ' + @certificate_name;
-		exec(@sql);
-		PRINT 'Dropped service broker certificate in master database';
+		set @sql = 'USE master;
+DROP CERTIFICATE ' + @certificate_name;
+		IF @what_if = 0 BEGIN
+			exec(@sql);
+			PRINT '--> Dropped service broker certificate in master database';
+		END ELSE
+			PRINT (@sql);
 	end
 	else
-		print 'Certificate for ServiceBroker endpoint don''t exists';
+		print 'WARNING:	Certificate ' + @certificate_name + ' for ServiceBroker endpoint don''t exists';
 
 END
 GO
@@ -704,22 +717,30 @@ GO
 -- Run this procedure on initialized target/receiver instance.
 -- Execute generated script on initiated sender/source/initiator instance.
 CREATE OR ALTER PROCEDURE
-srb.generate_remote_proxy_login_creation_script
+srb.generate_proxy_login
 		@login sysname,
 		@password nvarchar(4000)
 as begin
 
 print ''
-
+PRINT('----------------------------------------------------------------------------------------------');
+PRINT('--		COPY AND EXECUTE THIS CODE ON THE INSTANCE WHERE YOU ARE SENDING MESSAGES			 ');
+PRINT('----------------------------------------------------------------------------------------------');
+PRINT''
 declare @sql nvarchar(max) = '
-USE master;';
+USE master;
+GO';
 
 -- create the login on remote instance that will send the data through the Endpoint
 set @sql += "
-BEGIN TRY
-DROP USER IF EXISTS "+@login+"User;
-DROP LOGIN "+@login+";
-END TRY BEGIN CATCH END CATCH
+
+IF (1 = (SELECT COUNT(*) FROM master.sys.certificates WHERE name = '"+@login+"ProxyServiceBrokerCertificate'))
+	DROP CERTIFICATE "+@login+"ProxyServiceBrokerCertificate;
+
+DROP USER IF EXISTS "+@login+";
+
+IF (1 = (SELECT COUNT(*) FROM master.sys.syslogins WHERE name = '"+@login+"'))
+	DROP LOGIN "+@login+";
 ";
 
 set @sql += "
@@ -727,29 +748,26 @@ CREATE LOGIN "+@login+" WITH PASSWORD = '"+@password+"';
 ";
 -- Create a user for our login
 set @sql += "
-CREATE USER "+@login+"User FOR LOGIN "+@login+";
+CREATE USER "+@login+" FOR LOGIN "+@login+";
+GO
 ";
 
 declare @cert_encoded varbinary(max);
---EXEC sp_executesql	N'USE master;SELECT @cert = CERTENCODED(certificate_id) from sys.service_broker_endpoints',
---					N'@cert VARBINARY(MAX) OUTPUT',
---					@cert = @cert_encoded OUTPUT;
-
-SELECT @cert_encoded = CERTENCODED(certificate_id)
-from master.sys.service_broker_endpoints;
+EXEC sp_executesql	N'USE master;SELECT @cert = CERTENCODED(certificate_id) from sys.service_broker_endpoints',
+					N'@cert VARBINARY(MAX) OUTPUT',
+					@cert = @cert_encoded OUTPUT;
+-- NOTE: CANNOT USE THIS BECAUSE IT MUST BE EXECUTED IN master DATABASE (otherwise CERTENCODED is null)
+-- SELECT @cert_encoded = CERTENCODED(certificate_id)
+-- from master.sys.service_broker_endpoints;
 
 if(@cert_encoded is not null)
 set @sql += "
-BEGIN TRY
-	DROP CERTIFICATE "+@login+"ProxyServiceBrokerCertificate;
-END TRY BEGIN CATCH END CATCH
-GO
 CREATE CERTIFICATE "+@login+"ProxyServiceBrokerCertificate 
-	AUTHORIZATION "+@login+"User
+	AUTHORIZATION "+@login+"
 	FROM BINARY = "+CONVERT(VARCHAR(MAX), @cert_encoded, 1)+";
 ";
 else
-	print '--> Cannot find the certificate for service endpoint. Run EXEC srb.init_global_ssb'
+	print '--> WARNING: Cannot find the certificate for service endpoint. Run EXEC srb.init_global_ssb'
 
 -- finally grant the connect permissions to login for the endpoint
 set @sql += "
@@ -767,45 +785,110 @@ EXEC(@sql);
 PRINT '--> Execute the following script on the remote sender/initiator/source instance:'
 PRINT @sql
 
+print ''
+PRINT('----------------------------------------------------------------------------------------------');
+PRINT('--		END OF PROXY LOGIN SCRIPT					 ');
+PRINT('----------------------------------------------------------------------------------------------');
+PRINT''
+
 end
 GO
 
 -- Initialize route on the sender instance.
 -- Run this procedure on target/receiver instance
 -- Copy and run generated script on source/initiator instance.
-CREATE OR ALTER PROCEDURE srb.generate_proxy_route_script 
-	@target_service SYSNAME,
+CREATE OR ALTER PROCEDURE srb.generate_proxy_route 
+	@target_service SYSNAME, -- use @@servicename
+	@target_database SYSNAME,
 	@target_address varchar(256) = NULL, -- OR 'LOCAL' for intra-instance routes.
 	@source_database SYSNAME,
-	@authorization sysname = 'dbo'
+	@authorization sysname,
+	@login sysname
 AS BEGIN
-declare @sql NVARCHAR(MAX);
+declare @sql NVARCHAR(MAX) = '';
+
+EXEC ("USE " + @target_database);
+
 
 with route_info as (
-select	db_name = DB_NAME(DB_ID()),
+select	db_name = @target_database,
 		service_name = @target_service,
-		sb_guid = (select service_broker_guid from sys.databases where name = DB_NAME(DB_ID())), 
+		sb_guid = (select service_broker_guid from sys.databases where name = @target_database), 
 		protocol = te.protocol_desc,
 		server = isnull(ip_address, CAST(serverproperty('servername') as varchar(256))),
 		port
-from sys.service_broker_endpoints sbe
-	join sys.tcp_endpoints te on sbe.endpoint_id = te.endpoint_id
+from master.sys.service_broker_endpoints sbe
+	join master.sys.tcp_endpoints te on sbe.endpoint_id = te.endpoint_id
 where sbe.type = 3 -- SERVICE_BROKER
 and EXISTS(SELECT * FROM sys.services WHERE name = @target_service)
 )
+SELECT @sql = CONCAT("
+IF ( 1 = (SELECT count(*) FROM sys.remote_service_bindings WHERE name = '", server, "/", db_name, "/", service_name , "'))
+	DROP REMOTE SERVICE BINDING [", server, "/", db_name, "/", service_name , "];
+GO
 
-select @sql = CONCAT("USE ",@source_database,";
+IF ( 1 = (SELECT count(*) FROM sys.routes WHERE name = '", server, "/", db_name, "/", service_name , "'))
+	DROP ROUTE [", server, "/", db_name, "/", service_name , "];
+GO")
+from route_info;
+
+SET @sql += "
+
+DROP USER IF EXISTS " + @login;
+SET @sql += "
+GO
+CREATE USER " + @login + " FROM LOGIN " + @login ;
+
+with route_info as (
+select	db_name = @target_database,
+		service_name = @target_service,
+		sb_guid = (select service_broker_guid from sys.databases where name = @target_database), 
+		protocol = te.protocol_desc,
+		server = isnull(ip_address, CAST(serverproperty('servername') as varchar(256))),
+		port
+from master.sys.service_broker_endpoints sbe
+	join master.sys.tcp_endpoints te on sbe.endpoint_id = te.endpoint_id
+where sbe.type = 3 -- SERVICE_BROKER
+and EXISTS(SELECT * FROM sys.services WHERE name = @target_service)
+)
+select @sql += CONCAT("
+GO
+
+USE ",@source_database,";
+
+IF ( 1 = (SELECT count(*) FROM sys.remote_service_bindings WHERE name = '", server, "/", db_name, "/", service_name , "'))
+	DROP REMOTE SERVICE BINDING [", server, "/", db_name, "/", service_name , "];
+IF ( 1 = (SELECT count(*) FROM sys.routes WHERE name = '", server, "/", db_name, "/", service_name , "'))
+	DROP ROUTE [", server, "/", db_name, "/", service_name , "];
 
 CREATE ROUTE [", server, "/", db_name, "/", service_name , "] AUTHORIZATION [",@authorization,"] 
 WITH SERVICE_NAME = N'",service_name,"' ,
 		BROKER_INSTANCE = N'",sb_guid,"' , 
 		ADDRESS = N'",
 		ISNULL(CONCAT(protocol,"://",@target_address,":",port), CONCAT(protocol,"://",server,":",port)),
-		"'-- OR 'LOCAL' for intra-instance routes.")
+		"'-- OR 'LOCAL' for intra-instance routes.
+
+CREATE REMOTE SERVICE BINDING [", server, "/", db_name, "/", service_name , "]  
+	AUTHORIZATION [",@authorization,"] 
+    TO SERVICE '", service_name, "'  
+    WITH USER = ", @login, " ;  ")
 from route_info;
 
+print ''
+PRINT('----------------------------------------------------------------------------------------------');
+PRINT('--		SCRIPT THAT WILL INITIALIZE ROUTE THAT WILL ENABLE SENDER INSTANCE TO SEND MESSAGES	');
+PRINT('----------------------------------------------------------------------------------------------');
+PRINT''
 PRINT '-->	Execute the following script on the remote sender/source instance:'
 PRINT @sql
+
+
+print ''
+PRINT('----------------------------------------------------------------------------------------------');
+PRINT('--		END OF SCRIPT	');
+PRINT('----------------------------------------------------------------------------------------------');
+PRINT''
+
 END;
 GO
 
