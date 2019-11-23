@@ -805,7 +805,7 @@ CREATE OR ALTER PROCEDURE srb.generate_proxy_route
 	@authorization sysname,
 	@login sysname
 AS BEGIN
-declare @sql NVARCHAR(MAX) = '';
+declare @sql NVARCHAR(MAX) = 'USE '+ @source_database;
 
 EXEC ("USE " + @target_database);
 
@@ -822,7 +822,7 @@ from master.sys.service_broker_endpoints sbe
 where sbe.type = 3 -- SERVICE_BROKER
 and EXISTS(SELECT * FROM sys.services WHERE name = @target_service)
 )
-SELECT @sql = CONCAT("
+SELECT @sql += CONCAT("
 IF ( 1 = (SELECT count(*) FROM sys.remote_service_bindings WHERE name = '", server, "/", db_name, "/", service_name , "'))
 	DROP REMOTE SERVICE BINDING [", server, "/", db_name, "/", service_name , "];
 GO
