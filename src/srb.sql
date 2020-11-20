@@ -636,6 +636,13 @@ PRINT @sql
 end
 GO
 
+CREATE PROCEDURE srb.create_proxy @service sysname, @uri nvarchar(4000)
+AS BEGIN
+    DECLARE @sql NVARCHAR(MAX) = CONCAT('CREATE ROUTE ', @service, 'ProxyRoute WITH SERVICE_NAME = N''', @service, ''',
+     ADDRESS = N''TCP://', @uri, ':4022''');
+    EXEC(@sql);
+END
+							  
 -- Initialize route on the sender instance.
 CREATE PROCEDURE srb.init_remote_proxy_route 
 	@service SYSNAME,
