@@ -642,6 +642,7 @@ AS BEGIN
      ADDRESS = N''TCP://', @uri, ':4022''');
     EXEC(@sql);
 END
+GO
 							  
 -- Initialize route on the sender instance.
 CREATE PROCEDURE srb.init_remote_proxy_route 
